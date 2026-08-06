@@ -142,11 +142,17 @@ _SECRET_CFG_NAMES = r"(?:api[ _.\-]?key|token|secret|passwd|password|credential|
 _CFG_VALUE = r"(['\"]?)([^\s&]+?)\2(?=[\s&]|$)"
 
 # Programmatic env lookups (``os.getenv(...)``, ``os.environ[...]``,
-# ``os.environ.get(...)``, ``process.env.X``, ``$ENV{X}``) reference variable
-# *names*, not secret values. When one appears as the VALUE of a KEY=... match
-# it's a code snippet, not a leaked secret — skip redaction (issue #2852).
+# ``os.environ.get(...)``, ``process.env.X``, ``$ENV{X}``) and SHELL VARIABLE
+# REFERENCES (``${VAR}``, ``${VAR:-default}``, ``${VAR:+x}``, ``$VAR``)
+# reference variable *names*, not secret values. When one appears as the
+# VALUE of a KEY=... match it's an interpolation, not a leaked secret — skip
+# redaction (issue #2852 for the env-lookup half; the ``${...}`` half was
+# added after the redactor rewrote docker-compose interpolations like
+# ``MINIO_ROOT_PASSWORD=${MINI...:*** into literal ``***`` on
+# disk, breaking compose parsing and silently running services with a
+# 3-char password).
 _ENV_LOOKUP_VALUE_RE = re.compile(
-    r"^(?:os\.(?:getenv|environ)|process\.env|\$ENV\{)"
+    r"^(?:os\.(?:getenv|environ)|process\.env|\$ENV\{|\$\{|\$[A-Za-z_])"
 )
 # Namespaced (dotted) key: the secret word may sit anywhere in a dotted path.
 _CFG_DOTTED_RE = re.compile(
@@ -780,7 +786,11 @@ def redact_sensitive_text(
         if code_file:
             def _redact_db(m):
                 pw = m.group(2)
-                if pw.startswith("{") and pw.endswith("}"):
+                # ``{...}`` = f-string template reference, ``${...}`` / ``$VAR``
+                # = shell/env interpolation (e.g. a docker-compose DSN like
+                # ``postgres://user:***@db``). Both reference
+                # variables, not literal credentials — preserve verbatim.
+                if (pw.startswith("{") and pw.endswith("}")) or pw.startswith("$"):
                     return m.group(0)
                 return f"{m.group(1)}***{m.group(3)}"
             text = _DB_CONNSTR_RE.sub(_redact_db, text)

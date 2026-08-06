@@ -214,6 +214,60 @@ class TestEnvLookupPreserved:
         assert "sk-realSecretValue1234567890" not in result
 
 
+class TestShellInterpolationPreserved:
+    """Shell variable references as secret-assignment VALUES must not be
+    rewritten. The redactor turned docker-compose interpolations like
+    ``MINIO_ROOT_PASSWORD=${MINI...:*** into literal ``***``
+    on disk — compose then failed to parse and services silently ran with a
+    3-character password. ``${...}`` / ``$VAR`` name a variable; they carry
+    no secret material of their own, so they pass through verbatim.
+    """
+
+    def test_compose_interpolation_with_default(self):
+        text = "MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:***"
+        assert redact_sensitive_text(text, force=True) == text
+
+    def test_compose_interpolation_bare(self):
+        text = "POSTGRES_PASSWORD=${POSTGRES_PASSWORD}"
+        assert redact_sensitive_text(text, force=True) == text
+
+    def test_compose_interpolation_default_value(self):
+        text = "GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}"
+        assert redact_sensitive_text(text, force=True) == text
+
+    def test_dollar_var_reference(self):
+        text = "API_SECRET=${MY_SECRET}"
+        assert redact_sensitive_text(text, force=True) == text
+
+    def test_dsn_shell_interpolation_code_file(self):
+        # docker-compose / k8s DSN with shell interpolation in the password
+        # slot must survive the code_file pass unchanged.
+        text = "postgresql://postgres:***@db:5432/app"
+        assert redact_sensitive_text(text, force=True, code_file=True) == text
+
+    def test_env_dump_mode_preserves_interpolation(self):
+        from agent.redact import redact_terminal_output
+
+        text = "MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:***"
+        assert redact_terminal_output(text, command="env") == text
+
+    def test_real_value_next_to_interpolation_still_redacted(self):
+        # A literal credential on a sibling line must still be masked even
+        # though an interpolation sits nearby.
+        text = (
+            "MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:***\n"
+            "POSTGRES_PASSWORD=hunter2hunter2"
+        )
+        result = redact_sensitive_text(text, force=True)
+        assert "${MINIO_ROOT_PASSWORD:***" in result
+        assert "hunter2hunter2" not in result
+
+    def test_real_literal_still_redacted(self):
+        text = "DATABASE_PASSWORD=supersecretpw123"
+        result = redact_sensitive_text(text, force=True)
+        assert "supersecretpw123" not in result
+
+
 class TestJsonFields:
     def test_json_api_key(self):
         text = '{"apiKey": "sk-proj-abc123def456ghi789jkl012"}'
