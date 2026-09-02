@@ -868,6 +868,26 @@ When the iteration budget is fully exhausted, the CLI shows a notification to th
 
 `agent.api_max_retries` controls how many times Hermes retries a provider API call on transient errors (rate limits, connection drops, 5xx) **before** fallback-provider switching engages. The default is `3` — four attempts total. If you have [fallback providers](/user-guide/features/fallback-providers) configured and want to fail over faster, drop this to `0` so the first transient error on your primary immediately hands off to the fallback instead of churning retries against the flaky endpoint.
 
+### Rate-limit retry policy (`agent.rate_limit_retry`)
+
+When your primary provider returns HTTP 429 (rate limited), Hermes normally falls back to your next provider immediately. Use `agent.rate_limit_retry` to hold the primary provider on long exponential backoff instead — useful when every fallback rides the same throttled upstream (single-tenant aggregators, z.ai).
+
+```yaml
+agent:
+  rate_limit_retry:
+    max_retries: -1    # -1 = unlimited retries, 0 = off (default), N = finite budget
+    backoff_base: 10   # seconds, first wait (default: 10)
+    backoff_max: 600   # seconds, ceiling (default: 600)
+```
+
+- `max_retries: -1` keeps retrying indefinitely until the provider recovers
+- `max_retries: N` (positive) retries at most N times before falling back
+- `max_retries: 0` or absent section disables the policy (legacy behavior)
+- Billing errors (402) are always exempt — backoff cannot recover an empty account
+- A provider-supplied `Retry-After` header longer than the policy schedule still wins
+
+The policy holds the credential pool entry instead of marking it exhausted, preventing a single-entry pool from starving other processes (cron jobs, new sessions) during a 429 storm.
+
 ## Standing Goals (`/goal`)
 
 When a standing goal is active, Hermes judges whether each assistant response satisfies it. If not, it feeds a continuation prompt back into the same session and keeps working until the goal is done, the turn budget is exhausted, or the user pauses/clears it. The turn budget is the real backstop — judge failures fail **open** (continue) so a flaky judge never wedges progress.

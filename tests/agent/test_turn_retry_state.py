@@ -28,18 +28,24 @@ EXPECTED_FIELDS = {
     "llama_cpp_grammar_retry_attempted",
     "primary_recovery_attempted",
     "has_retried_429",
+    "rate_limit_policy_retries",
     "auth_failover_attempted",
     "restart_with_compressed_messages",
     "restart_with_length_continuation",
     "restart_with_rebuilt_messages",
-    "restart_with_redirected_messages",
 }
 
 
 def test_all_guards_default_false():
+    # Booleans are one-shot guards; rate_limit_policy_retries is an int
+    # counter (0 = no policy retries taken) and is checked separately.
+    COUNTER_FIELDS = {"rate_limit_policy_retries"}
     s = TurnRetryState()
     for name, value in s:
-        assert value is False, f"{name} should default to False"
+        if name in COUNTER_FIELDS:
+            assert value == 0, f"{name} should default to 0"
+        else:
+            assert value is False, f"{name} should default to False"
 
 
 def test_field_set_matches_contract():
